@@ -1,13 +1,20 @@
 name: Clip
+
 on:
   workflow_dispatch:
     inputs:
-      url: {required: true}
-      start: {required: true}
-      end: {required: true}
-      quality: {default: '1080'}
-      short: {default: 'no'}
-      channel_id: {required: true}
+      url:
+        required: true
+      start:
+        required: true
+      end:
+        required: true
+      quality:
+        default: '1080'
+      short:
+        default: 'no'
+      channel_id:
+        required: true
 
 permissions:
   contents: write
@@ -16,6 +23,7 @@ jobs:
   clip:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
     env:
       URL: ${{ inputs.url }}
       START: ${{ inputs.start }}
@@ -27,48 +35,96 @@ jobs:
       COOKIES: ${{ secrets.YT_COOKIES }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+
     steps:
       - name: Validate
         run: |
           [[ "$URL" =~ ^https://(www\.|m\.)?(youtube\.com|youtu\.be)/ ]] || exit 1
           [[ "$START" =~ ^[0-9:]+$ && "$END" =~ ^[0-9:]+$ ]] || exit 1
           [[ "$Q" =~ ^(720|1080|1440|2160)$ ]] || exit 1
+          [[ "$SHORT" =~ ^(yes|no)$ ]] || exit 1
 
       - name: Install
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
-          pip install -U "yt-dlp[default]"
+          python -m pip install -U "yt-dlp[default]"
 
       - name: Download section
         run: |
-          printf '%s' "$COOKIES" > cookies.txt
-          yt-dlp --cookies cookies.txt --js-runtimes node --remote-components ejs:github \
-            --download-sections "*${START}-${END}" --force-keyframes-at-cuts \
-            -f "bv*[height<=${Q}]+ba/b[height<=${Q}]" -o "raw.%(ext)s" "$URL"
+          printf '%s' "${COOKIES:-}" > cookies.txt
+
+          COOKIE_ARGS=()
+          if [ -s cookies.txt ]; then
+            COOKIE_ARGS=(--cookies cookies.txt)
+          fi
+
+          yt-dlp \
+            "${COOKIE_ARGS[@]}" \
+            --js-runtimes node \
+            --remote-components ejs:github \
+            --download-sections "*${START}-${END}" \
+            --no-part \
+            --retries 3 \
+            --fragment-retries 3 \
+            --concurrent-fragments 4 \
+            -f "bv*[height<=${Q}]+ba/b[height<=${Q}]" \
+            --merge-output-format mp4 \
+            -o "raw.%(ext)s" \
+            "$URL"
+
           rm -f cookies.txt
 
       - name: Convert
         run: |
-          IN=$(ls raw.* | head -1)
-          if [ "$SHORT" = "yes" ]; then
-            ffmpeg -y -i "$IN" -vf "crop=ih*9/16:ih,scale=1080:1920" \
-              -c:v libx264 -preset veryfast -crf 20 -c:a aac -movflags +faststart clip.mp4
-          else
-            ffmpeg -y -i "$IN" \
-              -c:v libx264 -preset veryfast -crf 20 -c:a aac -movflags +faststart clip.mp4
+          shopt -s nullglob
+          FILES=(raw.*)
+
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "No downloaded video found"
+            exit 1
           fi
+
+          IN="${FILES[0]}"
+
+          if [ "$SHORT" = "yes" ]; then
+            ffmpeg -y -i "$IN" \
+              -vf "crop=ih*9/16:ih,scale=1080:1920" \
+              -c:v libx264 -preset veryfast -crf 20 \
+              -c:a aac -movflags +faststart \
+              clip.mp4
+          else
+            # First try: fast stream copy, no video re-encoding
+            if ! ffmpeg -y -i "$IN" \
+              -c copy -movflags +faststart clip.mp4; then
+
+              # Fallback if the source codecs cannot be copied into MP4
+              rm -f clip.mp4
+              ffmpeg -y -i "$IN" \
+                -c:v libx264 -preset veryfast -crf 20 \
+                -c:a aac -movflags +faststart \
+                clip.mp4
+            fi
+          fi
+
+          test -s clip.mp4
 
       - name: Upload to Release
         run: |
-          gh release create "clip-${{ github.run_id }}" clip.mp4 --title "clip" --notes ""
+          gh release create "clip-${{ github.run_id }}" clip.mp4 \
+            --title "clip" --notes ""
 
       - name: Send link to Discord
         run: |
           LINK="https://github.com/${GH_REPO}/releases/download/clip-${{ github.run_id }}/clip.mp4"
+
           jq -n --arg c "✅ Clip ready: $LINK" '{content:$c}' | \
-          curl -s -w "\nHTTP %{http_code}\n" -X POST -H "Authorization: Bot $BOT" -H "Content-Type: application/json" \
-            -d @- "https://discord.com/api/v10/channels/$CH/messages"
+          curl -s -w "\nHTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: Bot $BOT" \
+            -H "Content-Type: application/json" \
+            -d @- \
+            "https://discord.com/api/v10/channels/$CH/messages"
 
       - name: Cleanup old clips
         run: |
@@ -79,5 +135,8 @@ jobs:
         if: failure()
         run: |
           jq -n '{content:"❌ Clip fail ho gayi. Link, time ya YouTube block check karo."}' | \
-          curl -s -X POST -H "Authorization: Bot $BOT" -H "Content-Type: application/json" \
-            -d @- "https://discord.com/api/v10/channels/$CH/messages"
+          curl -s -X POST \
+            -H "Authorization: Bot $BOT" \
+            -H "Content-Type: application/json" \
+            -d @- \
+            "https://discord.com/api/v10/channels/$CH/messages"
