@@ -1,0 +1,80 @@
+name: Clip
+on:
+  workflow_dispatch:
+    inputs:
+      url: {required: true}
+      start: {required: true}
+      end: {required: true}
+      quality: {default: '1080'}
+      short: {default: 'no'}
+      channel_id: {required: true}
+
+permissions:
+  contents: write
+
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      URL: ${{ inputs.url }}
+      START: ${{ inputs.start }}
+      END: ${{ inputs.end }}
+      Q: ${{ inputs.quality }}
+      SHORT: ${{ inputs.short }}
+      CH: ${{ inputs.channel_id }}
+      BOT: ${{ secrets.DISCORD_BOT_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Validate
+        run: |
+          [[ "$URL" =~ ^https://(www\.|m\.)?(youtube\.com|youtu\.be)/ ]] || exit 1
+          [[ "$START" =~ ^[0-9:]+$ && "$END" =~ ^[0-9:]+$ ]] || exit 1
+          [[ "$Q" =~ ^(720|1080|1440|2160)$ ]] || exit 1
+
+      - name: Install
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          pip install -U "yt-dlp[default]"
+
+      - name: Download section
+        run: |
+          yt-dlp --js-runtimes node --remote-components ejs:github \
+            --download-sections "*${START}-${END}" --force-keyframes-at-cuts \
+            -f "bv*[height<=${Q}]+ba/b[height<=${Q}]" -o "raw.%(ext)s" "$URL"
+
+      - name: Convert
+        run: |
+          IN=$(ls raw.* | head -1)
+          if [ "$SHORT" = "yes" ]; then
+            ffmpeg -y -i "$IN" -vf "crop=ih*9/16:ih,scale=1080:1920" \
+              -c:v libx264 -preset veryfast -crf 20 -c:a aac -movflags +faststart clip.mp4
+          else
+            ffmpeg -y -i "$IN" \
+              -c:v libx264 -preset veryfast -crf 20 -c:a aac -movflags +faststart clip.mp4
+          fi
+
+      - name: Upload to Release
+        run: |
+          gh release create "clip-${{ github.run_id }}" clip.mp4 --title "clip" --notes ""
+
+      - name: Send link to Discord
+        run: |
+          LINK="https://github.com/${GH_REPO}/releases/download/clip-${{ github.run_id }}/clip.mp4"
+          jq -n --arg c "✅ Clip ready: $LINK" '{content:$c}' | \
+          curl -s -X POST -H "Authorization: Bot $BOT" -H "Content-Type: application/json" \
+            -d @- "https://discord.com/api/v10/channels/$CH/messages"
+
+      - name: Cleanup old clips
+        run: |
+          gh release list --limit 100 --json tagName -q '.[10:][].tagName' | \
+          xargs -r -I{} gh release delete {} --cleanup-tag -y
+
+      - name: Tell Discord if failed
+        if: failure()
+        run: |
+          jq -n '{content:"❌ Clip fail ho gayi. Link, time ya YouTube block check karo."}' | \
+          curl -s -X POST -H "Authorization: Bot $BOT" -H "Content-Type: application/json" \
+            -d @- "https://discord.com/api/v10/channels/$CH/messages"
