@@ -24,6 +24,7 @@ jobs:
       SHORT: ${{ inputs.short }}
       CH: ${{ inputs.channel_id }}
       BOT: ${{ secrets.DISCORD_BOT_TOKEN }}
+     COOKIES: ${{ secrets.YT_COOKIES }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -39,11 +40,13 @@ jobs:
           sudo apt-get install -y ffmpeg
           pip install -U "yt-dlp[default]"
 
-      - name: Download section
+            - name: Download section
         run: |
-          yt-dlp --js-runtimes node --remote-components ejs:github \
+          printf '%s' "$COOKIES" > cookies.txt
+          yt-dlp --cookies cookies.txt --js-runtimes node --remote-components ejs:github \
             --download-sections "*${START}-${END}" --force-keyframes-at-cuts \
             -f "bv*[height<=${Q}]+ba/b[height<=${Q}]" -o "raw.%(ext)s" "$URL"
+          rm -f cookies.txt
 
       - name: Convert
         run: |
