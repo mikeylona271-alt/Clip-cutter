@@ -63,7 +63,7 @@ jobs:
         run: |
           gh release create "clip-${{ github.run_id }}" clip.mp4 --title "clip" --notes ""
 
-            - name: Send link to Discord
+      - name: Send link to Discord
         run: |
           LINK="https://github.com/${GH_REPO}/releases/download/clip-${{ github.run_id }}/clip.mp4"
           jq -n --arg c "✅ Clip ready: $LINK" '{content:$c}' | \
