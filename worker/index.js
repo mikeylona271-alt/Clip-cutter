@@ -18,15 +18,24 @@ async function verify(req, body, env) {
   const sig = req.headers.get('x-signature-ed25519');
   const ts = req.headers.get('x-signature-timestamp');
   if (!sig || !ts) return false;
-  try {
-    const key = await crypto.subtle.importKey('raw', hex(env.DISCORD_PUBLIC_KEY), {name:'Ed25519'}, false, ['verify']);
-    return await crypto.subtle.verify('Ed25519', key, hex(sig), new TextEncoder().encode(ts + body));
-  } catch (e) { return false; }
+  const pk = (env.DISCORD_PUBLIC_KEY || '').trim();
+  const data = new TextEncoder().encode(ts + body);
+  for (const alg of [{name:'Ed25519'}, {name:'NODE-ED25519', namedCurve:'NODE-ED25519'}]) {
+    try {
+      const key = await crypto.subtle.importKey('raw', hex(pk), alg, false, ['verify']);
+      return await crypto.subtle.verify(alg, key, hex(sig), data);
+    } catch (e) {}
+  }
+  return false;
 }
 
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
+
+    if (url.pathname === '/debug') {
+      return new Response('keylen=' + (env.DISCORD_PUBLIC_KEY || '').length);
+    }
 
     if (req.method === 'GET' && url.pathname === '/register') {
       if (url.searchParams.get('k') !== env.REGISTER_KEY) return new Response('no', {status:403});
