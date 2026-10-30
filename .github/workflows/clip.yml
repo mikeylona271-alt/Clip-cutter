@@ -63,11 +63,11 @@ jobs:
         run: |
           gh release create "clip-${{ github.run_id }}" clip.mp4 --title "clip" --notes ""
 
-      - name: Send link to Discord
+            - name: Send link to Discord
         run: |
           LINK="https://github.com/${GH_REPO}/releases/download/clip-${{ github.run_id }}/clip.mp4"
           jq -n --arg c "✅ Clip ready: $LINK" '{content:$c}' | \
-          curl -s -X POST -H "Authorization: Bot $BOT" -H "Content-Type: application/json" \
+          curl -s -w "\nHTTP %{http_code}\n" -X POST -H "Authorization: Bot $BOT" -H "Content-Type: application/json" \
             -d @- "https://discord.com/api/v10/channels/$CH/messages"
 
       - name: Cleanup old clips
