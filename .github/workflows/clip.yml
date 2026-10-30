@@ -24,7 +24,7 @@ jobs:
       SHORT: ${{ inputs.short }}
       CH: ${{ inputs.channel_id }}
       BOT: ${{ secrets.DISCORD_BOT_TOKEN }}
-     COOKIES: ${{ secrets.YT_COOKIES }}
+      COOKIES: ${{ secrets.YT_COOKIES }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
