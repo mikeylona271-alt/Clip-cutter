@@ -1,142 +1,203 @@
 name: Clip
 
 on:
-  workflow_dispatch:
-    inputs:
-      url:
-        required: true
-      start:
-        required: true
-      end:
-        required: true
-      quality:
-        default: '1080'
-      short:
-        default: 'no'
-      channel_id:
-        required: true
+workflow_dispatch:
+inputs:
+url:
+required: true
+start:
+required: true
+end:
+required: true
+quality:
+default: '1080'
+short:
+default: 'no'
+channel_id:
+required: true
 
 permissions:
-  contents: write
+contents: write
 
 jobs:
-  clip:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+clip:
+runs-on: ubuntu-latest
+timeout-minutes: 90
 
-    env:
-      URL: ${{ inputs.url }}
-      START: ${{ inputs.start }}
-      END: ${{ inputs.end }}
-      Q: ${{ inputs.quality }}
-      SHORT: ${{ inputs.short }}
-      CH: ${{ inputs.channel_id }}
-      BOT: ${{ secrets.DISCORD_BOT_TOKEN }}
-      COOKIES: ${{ secrets.YT_COOKIES }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
+env:
+  URL: ${{ inputs.url }}
+  START: ${{ inputs.start }}
+  END: ${{ inputs.end }}
+  Q: ${{ inputs.quality }}
+  SHORT: ${{ inputs.short }}
+  CH: ${{ inputs.channel_id }}
+  BOT: ${{ secrets.DISCORD_BOT_TOKEN }}
+  COOKIES: ${{ secrets.YT_COOKIES }}
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 
-    steps:
-      - name: Validate
-        run: |
-          [[ "$URL" =~ ^https://(www\.|m\.)?(youtube\.com|youtu\.be)/ ]] || exit 1
-          [[ "$START" =~ ^[0-9:]+$ && "$END" =~ ^[0-9:]+$ ]] || exit 1
-          [[ "$Q" =~ ^(720|1080|1440|2160)$ ]] || exit 1
-          [[ "$SHORT" =~ ^(yes|no)$ ]] || exit 1
+steps:
+  - name: Validate
+    run: |
+      [[ "$URL" =~ ^https://(www\.|m\.)?(youtube\.com|youtu\.be)/ ]] || exit 1
+      [[ "$START" =~ ^[0-9:]+$ && "$END" =~ ^[0-9:]+$ ]] || exit 1
+      [[ "$Q" =~ ^(720|1080|1440|2160)$ ]] || exit 1
+      [[ "$SHORT" =~ ^(yes|no)$ ]] || exit 1
 
-      - name: Install
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ffmpeg
-          python -m pip install -U "yt-dlp[default]"
+  - name: Install
+    run: |
+      sudo apt-get update -y
+      sudo apt-get install -y ffmpeg
+      python -m pip install -U "yt-dlp[default]"
 
-      - name: Download section
-        run: |
-          printf '%s' "${COOKIES:-}" > cookies.txt
+  - name: Download section
+    run: |
+      printf '%s' "${COOKIES:-}" > cookies.txt
 
-          COOKIE_ARGS=()
-          if [ -s cookies.txt ]; then
-            COOKIE_ARGS=(--cookies cookies.txt)
-          fi
+      COOKIE_ARGS=()
+      if [ -s cookies.txt ]; then
+        COOKIE_ARGS=(--cookies cookies.txt)
+      fi
 
-          yt-dlp \
-            "${COOKIE_ARGS[@]}" \
-            --js-runtimes node \
-            --remote-components ejs:github \
-            --download-sections "*${START}-${END}" \
-            --no-part \
-            --retries 3 \
-            --fragment-retries 3 \
-            --concurrent-fragments 4 \
-            -f "bv*[height<=${Q}]+ba/b[height<=${Q}]" \
-            --merge-output-format mp4 \
-            -o "raw.%(ext)s" \
-            "$URL"
+      yt-dlp \
+        "${COOKIE_ARGS[@]}" \
+        --js-runtimes node \
+        --remote-components ejs:github \
+        --download-sections "*${START}-${END}" \
+        --no-part \
+        --retries 3 \
+        --fragment-retries 3 \
+        --concurrent-fragments 4 \
+        -f "bv*[height<=${Q}]+ba/b[height<=${Q}]" \
+        --merge-output-format mp4 \
+        -o "raw.%(ext)s" \
+        "$URL"
 
-          rm -f cookies.txt
+      rm -f cookies.txt
 
-      - name: Convert
-        run: |
-          shopt -s nullglob
-          FILES=(raw.*)
+  - name: Convert only if needed
+    run: |
+      set -euo pipefail
+      shopt -s nullglob
+      FILES=(raw.*)
 
-          if [ ${#FILES[@]} -eq 0 ]; then
-            echo "No downloaded video found"
-            exit 1
-          fi
+      if [ ${#FILES[@]} -eq 0 ]; then
+        echo "No downloaded video found"
+        exit 1
+      fi
 
-          IN="${FILES[0]}"
+      IN="${FILES[0]}"
 
-          if [ "$SHORT" = "yes" ]; then
-            ffmpeg -y -i "$IN" \
-              -vf "crop=ih*9/16:ih,scale=1080:1920" \
+      # Check codecs, pixel format, dimensions and audio.
+      VIDEO_CODEC=$(ffprobe -v error -select_streams v:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 "$IN" | head -1)
+
+      PIX_FMT=$(ffprobe -v error -select_streams v:0 \
+        -show_entries stream=pix_fmt \
+        -of default=noprint_wrappers=1:nokey=1 "$IN" | head -1)
+
+      AUDIO_CODEC=$(ffprobe -v error -select_streams a:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 "$IN" | head -1 || true)
+
+      WIDTH=$(ffprobe -v error -select_streams v:0 \
+        -show_entries stream=width \
+        -of default=noprint_wrappers=1:nokey=1 "$IN" | head -1)
+
+      HEIGHT=$(ffprobe -v error -select_streams v:0 \
+        -show_entries stream=height \
+        -of default=noprint_wrappers=1:nokey=1 "$IN" | head -1)
+
+      echo "Input: $IN"
+      echo "Video codec: $VIDEO_CODEC"
+      echo "Pixel format: $PIX_FMT"
+      echo "Audio codec: ${AUDIO_CODEC:-none}"
+      echo "Resolution: ${WIDTH}x${HEIGHT}"
+
+      if [ "$SHORT" = "yes" ]; then
+        # Shorts always need rendering for crop and vertical output.
+        ffmpeg -y -fflags +genpts -i "$IN" \
+          -map 0:v:0 -map "0:a:0?" \
+          -vf "crop=ih*9/16:ih,scale=1080:1920:flags=lanczos,setsar=1,format=yuv420p" \
+          -c:v libx264 -preset veryfast -crf 20 \
+          -c:a aac -b:a 192k -ar 48000 \
+          -af "aresample=async=1:first_pts=0" \
+          -avoid_negative_ts make_zero \
+          -movflags +faststart \
+          clip.mp4
+      else
+        # If already standard H.264 + yuv420p + AAC MP4,
+        # preserve streams and avoid expensive re-encoding.
+        if [ "$VIDEO_CODEC" = "h264" ] && \
+           [ "$PIX_FMT" = "yuv420p" ] && \
+           { [ "$AUDIO_CODEC" = "aac" ] || [ -z "$AUDIO_CODEC" ]; }; then
+
+          echo "Already compatible. Trying fast stream copy."
+
+          if ! ffmpeg -y -fflags +genpts -i "$IN" \
+            -map 0:v:0 -map "0:a:0?" \
+            -c copy -avoid_negative_ts make_zero \
+            -movflags +faststart clip.mp4; then
+            echo "Stream copy failed. Re-encoding for compatibility."
+            rm -f clip.mp4
+            ffmpeg -y -fflags +genpts -i "$IN" \
+              -map 0:v:0 -map "0:a:0?" \
+              -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p" \
               -c:v libx264 -preset veryfast -crf 20 \
-              -c:a aac -movflags +faststart \
-              clip.mp4
-          else
-            # First try: fast stream copy, no video re-encoding
-            if ! ffmpeg -y -i "$IN" \
-              -c copy -movflags +faststart clip.mp4; then
-
-              # Fallback if the source codecs cannot be copied into MP4
-              rm -f clip.mp4
-              ffmpeg -y -i "$IN" \
-                -c:v libx264 -preset veryfast -crf 20 \
-                -c:a aac -movflags +faststart \
-                clip.mp4
-            fi
+              -c:a aac -b:a 192k -ar 48000 \
+              -af "aresample=async=1:first_pts=0" \
+              -avoid_negative_ts make_zero \
+              -movflags +faststart clip.mp4
           fi
+        else
+          echo "Incompatible source. Converting to standard MP4."
+          ffmpeg -y -fflags +genpts -i "$IN" \
+            -map 0:v:0 -map "0:a:0?" \
+            -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p" \
+            -c:v libx264 -preset veryfast -crf 20 \
+            -c:a aac -b:a 192k -ar 48000 \
+            -af "aresample=async=1:first_pts=0" \
+            -avoid_negative_ts make_zero \
+            -movflags +faststart clip.mp4
+        fi
+      fi
 
-          test -s clip.mp4
+      test -s clip.mp4
 
-      - name: Upload to Release
-        run: |
-          gh release create "clip-${{ github.run_id }}" clip.mp4 \
-            --title "clip" --notes ""
+      # Verify that the final file is readable.
+      ffprobe -v error -select_streams v:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 clip.mp4
 
-      - name: Send link to Discord
-        run: |
-          LINK="https://github.com/${GH_REPO}/releases/download/clip-${{ github.run_id }}/clip.mp4"
+  - name: Upload to Release
+    run: |
+      gh release create "clip-${{ github.run_id }}" clip.mp4 \
+        --title "clip" --notes ""
 
-          jq -n --arg c "✅ Clip ready: $LINK" '{content:$c}' | \
-          curl -s -w "\nHTTP %{http_code}\n" \
-            -X POST \
-            -H "Authorization: Bot $BOT" \
-            -H "Content-Type: application/json" \
-            -d @- \
-            "https://discord.com/api/v10/channels/$CH/messages"
+  - name: Send link to Discord
+    run: |
+      LINK="https://github.com/${GH_REPO}/releases/download/clip-${{ github.run_id }}/clip.mp4"
 
-      - name: Cleanup old clips
-        run: |
-          gh release list --limit 100 --json tagName -q '.[10:][].tagName' | \
-          xargs -r -I{} gh release delete {} --cleanup-tag -y
+      jq -n --arg c "✅ Clip ready: $LINK" '{content:$c}' | \
+      curl -s -w "\nHTTP %{http_code}\n" \
+        -X POST \
+        -H "Authorization: Bot $BOT" \
+        -H "Content-Type: application/json" \
+        -d @- \
+        "https://discord.com/api/v10/channels/$CH/messages"
 
-      - name: Tell Discord if failed
-        if: failure()
-        run: |
-          jq -n '{content:"❌ Clip fail ho gayi. Link, time ya YouTube block check karo."}' | \
-          curl -s -X POST \
-            -H "Authorization: Bot $BOT" \
-            -H "Content-Type: application/json" \
-            -d @- \
-            "https://discord.com/api/v10/channels/$CH/messages"
+  - name: Cleanup old clips
+    run: |
+      gh release list --limit 100 --json tagName -q '.[10:][].tagName' | \
+      xargs -r -I{} gh release delete {} --cleanup-tag -y
+
+  - name: Tell Discord if failed
+    if: failure()
+    run: |
+      jq -n '{content:"❌ Clip fail ho gayi. Link, time ya YouTube block check karo."}' | \
+      curl -s -X POST \
+        -H "Authorization: Bot $BOT" \
+        -H "Content-Type: application/json" \
+        -d @- \
+        "https://discord.com/api/v10/channels/$CH/messages"
